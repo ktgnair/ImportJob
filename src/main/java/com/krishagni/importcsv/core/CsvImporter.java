@@ -16,6 +16,7 @@ import com.krishagni.catissueplus.core.biospecimen.events.PmiDetail;
 import com.krishagni.catissueplus.core.biospecimen.events.VisitDetail;
 import com.krishagni.catissueplus.core.biospecimen.services.CollectionProtocolRegistrationService;
 import com.krishagni.catissueplus.core.biospecimen.services.VisitService;
+import com.krishagni.catissueplus.core.common.PlusTransactional;
 import com.krishagni.catissueplus.core.common.errors.ErrorType;
 import com.krishagni.catissueplus.core.common.errors.OpenSpecimenException;
 import com.krishagni.catissueplus.core.common.events.RequestEvent;
@@ -61,6 +62,7 @@ public class CsvImporter {
 	@Autowired
 	private VisitService visitService;
 	
+	@PlusTransactional
 	public void importCsv() {
 		ose = new OpenSpecimenException(ErrorType.USER_ERROR);
 		dataSource = new CsvFileDataSource(getFile());
@@ -72,9 +74,12 @@ public class CsvImporter {
 		    	importParticipant(record);
 		    }
 		    ose.checkAndThrow();
+		} catch (OpenSpecimenException ose) {
+		    logger.error("Error while parsing csv file in OpenSpecimenException: \n" + ose.getMessage());
 		} catch (Exception e) {
-		    logger.error("Error while parsing csv file : \n" + e.getMessage());
-		} finally {
+		    logger.error("Error while parsing csv file in Exception: \n" + e.getMessage());
+		}
+		finally {
 		    if (dataSource != null) {
 		    	dataSource.close();
 		    }
@@ -115,11 +120,11 @@ public class CsvImporter {
 		visitDetail.setComments(record.getValue(VISIT_COMMENTS));
 		visitDetail.setVisitDate(new SimpleDateFormat(DATE_FORMAT).parse(record.getValue(VISIT_DATE)));
 		
-		ResponseEvent<CollectionProtocolRegistrationDetail> resp = cprSvc.createRegistration(getRequest(cprDetail));
+		ResponseEvent<CollectionProtocolRegistrationDetail> participantResponse = cprSvc.createRegistration(getRequest(cprDetail));
 		ResponseEvent<VisitDetail> visitResponse = visitService.addVisit(getRequest(visitDetail));
 		
-		if (resp.getError() != null) {
-			resp.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
+		if (participantResponse.getError() != null) {
+			participantResponse.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
 		}
 		
 		if (visitResponse.getError() != null) {
