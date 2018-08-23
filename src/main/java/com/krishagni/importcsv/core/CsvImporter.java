@@ -1,5 +1,6 @@
 package com.krishagni.importcsv.core;
 
+import java.io.File;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -12,16 +13,19 @@ import org.springframework.beans.factory.annotation.Autowired;
 import com.krishagni.catissueplus.core.biospecimen.events.CollectionProtocolRegistrationDetail;
 import com.krishagni.catissueplus.core.biospecimen.events.ParticipantDetail;
 import com.krishagni.catissueplus.core.biospecimen.events.PmiDetail;
+import com.krishagni.catissueplus.core.biospecimen.events.VisitDetail;
 import com.krishagni.catissueplus.core.biospecimen.services.CollectionProtocolRegistrationService;
+import com.krishagni.catissueplus.core.biospecimen.services.VisitService;
 import com.krishagni.catissueplus.core.common.errors.ErrorType;
 import com.krishagni.catissueplus.core.common.errors.OpenSpecimenException;
 import com.krishagni.catissueplus.core.common.events.RequestEvent;
 import com.krishagni.catissueplus.core.common.events.ResponseEvent;
+import com.krishagni.catissueplus.core.common.util.ConfigUtil;
 import com.krishagni.importcsv.datasource.DataSource;
 import com.krishagni.importcsv.datasource.Impl.CsvFileDataSource;
 
 public class CsvImporter {
-	private final static String FILE_NAME = "/Users/swapnil/Downloads/apache-tomcat-9.0.10/data/import.csv";
+	private final static String FILE_NAME = "import.csv";
 	
 	private final static String DATE_FORMAT = "MM/dd/yyyy";
 	
@@ -39,27 +43,32 @@ public class CsvImporter {
 	
 	private final static String SITE_NAME = "Facility";
 	
+	private final static String VISIT = "Visit";
+	
+	private final static String VISIT_COMMENTS = "Visit Comments";
+	
+	private final static String DAY = "Day";
+	
 	private final static Log logger = LogFactory.getLog(CsvImporter.class);
 	
 	private OpenSpecimenException ose;
 	
+	private DataSource dataSource;
+	
 	@Autowired
 	private CollectionProtocolRegistrationService cprSvc;
 	
-	private DataSource dataSource;
-	
-	private int rowCount;
+	@Autowired
+	private VisitService visitService;
 	
 	public void importCsv() {
-		ose =  new OpenSpecimenException(ErrorType.USER_ERROR);
-		dataSource = new CsvFileDataSource(FILE_NAME);
-		rowCount = 0;
+		ose = new OpenSpecimenException(ErrorType.USER_ERROR);
+		dataSource = new CsvFileDataSource(getFile());
 		
 		try {
-		    isHeaderRowValid(dataSource);
+		    isHeaderRowValid(dataSource); 
 		    while (dataSource.hasNext()) {
 		    	Record record = dataSource.nextRecord();
-		    	rowCount++;
 		    	importParticipant(record);
 		    }
 		    ose.checkAndThrow();
@@ -72,8 +81,15 @@ public class CsvImporter {
 		}
 	}
 	
+	private String getFile() {
+		File file = new File(ConfigUtil.getInstance().getDataDir() + File.separatorChar, FILE_NAME); 
+		return file.getAbsolutePath();
+	}
+	
 	private void importParticipant(Record record) throws ParseException {                
-		CollectionProtocolRegistrationDetail cprDetail = new CollectionProtocolRegistrationDetail(); 
+		CollectionProtocolRegistrationDetail cprDetail = new CollectionProtocolRegistrationDetail();
+		VisitDetail visitDetail = new VisitDetail();
+		
 		cprDetail.setCpShortTitle(record.getValue(CP_SHORT_TITLE));
 		cprDetail.setParticipant(new ParticipantDetail());
 		cprDetail.setRegistrationDate(new SimpleDateFormat(DATE_FORMAT).parse(record.getValue(VISIT_DATE)));
@@ -86,15 +102,28 @@ public class CsvImporter {
 		// Setting PMI
 		cprDetail.getParticipant().setPhiAccess(true);
 		PmiDetail pmi = new PmiDetail();
-
+		
 		pmi.setMrn(record.getValue(MRN));
 		pmi.setSiteName(record.getValue(SITE_NAME));
 		
 		cprDetail.getParticipant().setPmi(pmi);
+		
+		// Setting Visit
+		visitDetail.setCpShortTitle(record.getValue(CP_SHORT_TITLE));
+		visitDetail.setPpid(record.getValue(PPID));
+		visitDetail.setEventLabel(record.getValue(VISIT) + record.getValue(DAY));
+		visitDetail.setComments(record.getValue(VISIT_COMMENTS));
+		visitDetail.setVisitDate(new SimpleDateFormat(DATE_FORMAT).parse(record.getValue(VISIT_DATE)));
+		
 		ResponseEvent<CollectionProtocolRegistrationDetail> resp = cprSvc.createRegistration(getRequest(cprDetail));
+		ResponseEvent<VisitDetail> visitResponse = visitService.addVisit(getRequest(visitDetail));
 		
 		if (resp.getError() != null) {
 			resp.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
+		}
+		
+		if (visitResponse.getError() != null) {
+			visitResponse.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
 		}
 	}
 	
@@ -109,10 +138,13 @@ public class CsvImporter {
 		expectedHeader.add(CP_SHORT_TITLE);
 		expectedHeader.add(VISIT_DATE);
 		expectedHeader.add(SITE_NAME);
+		expectedHeader.add(VISIT);
+		expectedHeader.add(DAY);
+		expectedHeader.add(VISIT_COMMENTS);
 		
 		for (String header : csvHeaderRow) {
 			if (!expectedHeader.contains(header)) {
-				throw new Exception("Headers of csv file does not match");
+				throw new Exception("Could not parse the file because the headers of the CSV file is not as expected.");
 			}
 		}
 	}
