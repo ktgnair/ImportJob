@@ -75,9 +75,9 @@ public class CsvImporter {
 		    }
 		    ose.checkAndThrow();
 		} catch (OpenSpecimenException ose) {
-		    logger.error("Error while parsing csv file in OpenSpecimenException: \n" + ose.getMessage());
+		    logger.error("Error while parsing csv file in: \n" + ose.getMessage());
 		} catch (Exception e) {
-		    logger.error("Error while parsing csv file in Exception: \n" + e.getMessage());
+		    logger.error("Encountered server error: \n" + e.getMessage());
 		}
 		finally {
 		    if (dataSource != null) {
