@@ -9,11 +9,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.commons.io.IOUtils;
+import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Configurable;
 
 import com.krishagni.catissueplus.core.administrative.domain.User;
 import com.krishagni.catissueplus.core.biospecimen.events.CollectionProtocolRegistrationDetail;
@@ -34,10 +35,11 @@ import com.krishagni.catissueplus.core.common.util.Utility;
 import com.krishagni.importcsv.datasource.DataSource;
 import com.krishagni.importcsv.datasource.Impl.CsvFileDataSource;
 
+@Configurable
 public class CsvImporter {
-	private final static String INPUT_FILE_NAME = "/Users/swapnil/Downloads/apache-tomcat-9.0.10/data/import.csv";
+	private final static String INPUT_FILE_NAME = "import.csv";
 	
-	private final static String REPORT_FILE_NAME = "/Users/swapnil/Downloads/apache-tomcat-9.0.10/data/csv-import-output.csv";
+	private final static String REPORT_FILE_NAME = "report-status-file.csv";
 	
 	private final static String DATE_FORMAT = "MM/dd/yyyy";
 	
@@ -74,18 +76,17 @@ public class CsvImporter {
 	private int rowCount;
 	
 	private int recordsFailed;
-
+	
 	@Autowired
 	private CollectionProtocolRegistrationService cprSvc;
 	
 	@Autowired
 	private VisitService visitService;
 	
-	@PlusTransactional
 	public void importCsv() {
 		ose =  new OpenSpecimenException(ErrorType.USER_ERROR);
-		dataSource = new CsvFileDataSource(INPUT_FILE_NAME);
-		createOutputCsvFile();
+		dataSource = new CsvFileDataSource(getInputFile().getAbsolutePath());
+		createReportCsvFile();
 		rowCount = 0;
 		recordsFailed = 0;
 			
@@ -93,33 +94,38 @@ public class CsvImporter {
 		    isHeaderRowValid(dataSource); 
 		    while (dataSource.hasNext()) {
 		    	Record record = dataSource.nextRecord();
-		    	importParticipant(record);
 		    	rowCount++;
+		    	importParticipant(record);
 		    }
 		    
 		    if (ose.hasAnyErrors()) {
-		    	sendImportReportMail();
+		    	sendReportMail();
 		    	ose.checkAndThrow();
 		    }
 		} catch (OpenSpecimenException ose) {
-		    logger.error("Error while parsing csv file in: \n" + ose.getMessage());
+			logger.error("Error while parsing input csv: " + this.ose.getMessage());
 		} catch (Exception e) {
 		    logger.error("Encountered server error: \n" + e.getMessage());
-		}
-		finally {
+		} finally {
 		    if (dataSource != null) {
 		    	dataSource.close();
 		    }
-		    IOUtils.closeQuietly(reportFile);
+		    FileUtils.deleteQuietly(getReportFile());
 		}
 	}
 	
-//	private String getFile() {
-//		File file = new File(ConfigUtil.getInstance().getDataDir() + File.separatorChar, FILE_NAME); 
-//		return file.getAbsolutePath();
-//	}
+	private File getInputFile() {
+		File file = new File(ConfigUtil.getInstance().getDataDir() + File.separatorChar, INPUT_FILE_NAME); 
+		return file;
+	}
 	
-	private void importParticipant(Record record) throws ParseException {
+	private File getReportFile() {
+		File file = new File(ConfigUtil.getInstance().getDataDir() + File.separatorChar, REPORT_FILE_NAME); 
+		return file;
+	}
+	
+	@PlusTransactional
+	private ResponseEvent<Object> importParticipant(Record record) throws ParseException, OpenSpecimenException {
 		CollectionProtocolRegistrationDetail cprDetail = new CollectionProtocolRegistrationDetail();
 		VisitDetail visitDetail = new VisitDetail();
 		cprDetail.setCpShortTitle(record.getValue(CP_SHORT_TITLE));
@@ -134,10 +140,8 @@ public class CsvImporter {
 		// Setting PMI
 		cprDetail.getParticipant().setPhiAccess(true);
 		PmiDetail pmi = new PmiDetail();
-		
 		pmi.setMrn(record.getValue(MRN));
 		pmi.setSiteName(record.getValue(SITE_NAME));
-		
 		cprDetail.getParticipant().setPmi(pmi);
 		
 		// Setting Visit
@@ -146,25 +150,24 @@ public class CsvImporter {
 		visitDetail.setEventLabel(record.getValue(VISIT) + record.getValue(DAY));
 		visitDetail.setComments(record.getValue(VISIT_COMMENTS));
 		visitDetail.setVisitDate(new SimpleDateFormat(DATE_FORMAT).parse(record.getValue(VISIT_DATE)));
-		
+
 		ResponseEvent<CollectionProtocolRegistrationDetail> participantResponse = cprSvc.createRegistration(getRequest(cprDetail));
-		ResponseEvent<VisitDetail> visitResponse = visitService.addVisit(getRequest(visitDetail));
 		
 		if (participantResponse.getError() != null) {
 			participantResponse.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
 			addRowToReport(record, participantResponse.getError());
+			return participantResponse.serverError(participantResponse.getError());
+		} else {
+			ResponseEvent<VisitDetail> visitResponse = visitService.addVisit(getRequest(visitDetail));
+			if (visitResponse.getError() != null) {
+				visitResponse.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
+				addRowToReport(record, visitResponse.getError());
+				return visitResponse.serverError(visitResponse.getError());
+			}
 		}
-		
-		if (visitResponse.getError() != null) {
-			visitResponse.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
-			addRowToReport(record, visitResponse.getError());
-		}
-			
-		if (participantResponse.getError() != null) {
-			participantResponse.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
-			addRowToReport(record, participantResponse.getError());
-		}
-	}
+
+		return null;
+	} 
 	
 	private void addRowToReport(Record record, OpenSpecimenException error) {
 		List<String> data = getRow(record);
@@ -209,7 +212,7 @@ public class CsvImporter {
 		return headers;
 	}
 	
-	private void sendImportReportMail() {
+	private void sendReportMail() {
 		String date = Utility.getDateString(Calendar.getInstance().getTime());
 
 		Map<String, Object> emailProps = new HashMap<>();
@@ -230,7 +233,7 @@ public class CsvImporter {
 		}
 
 		String emailTmpl = MSK_IMPORT_JOB_STATUS;
-		File[] attachments = new File[] {new File(REPORT_FILE_NAME)};
+		File[] attachments = new File[] {new File(getReportFile().getAbsolutePath())};
 		for (User user : rcpts) {
 			emailProps.put("rcpt", user);
 			EmailUtil.getInstance().sendEmail(emailTmpl, new String[] {user.getEmailAddress()}, attachments, emailProps);
@@ -244,13 +247,14 @@ public class CsvImporter {
 		result.put("failedRecords", this.recordsFailed);
 		result.put("passedRecords", this.rowCount - this.recordsFailed);
 		result.put("jobID", "Not Specified");
-		result.put("filename", INPUT_FILE_NAME);
+		result.put("filename", getInputFile().getAbsolutePath());
 		
 		return result;
 	}
 	
-	private void createOutputCsvFile() {
-		reportFile = CsvFileWriter.createCsvFileWriter(new File(REPORT_FILE_NAME));
+	private void createReportCsvFile() {
+		File file = new File(getReportFile().getAbsolutePath());
+		reportFile = CsvFileWriter.createCsvFileWriter(file);
 		List<String> headers = getCsvHeaders();
 		headers.add("ERROR");
 		reportFile.writeNext(headers.toArray(new String[headers.size()]));
