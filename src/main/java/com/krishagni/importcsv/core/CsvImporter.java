@@ -81,7 +81,6 @@ public class CsvImporter {
 	@Autowired
 	private VisitService visitService;
 	
-	@PlusTransactional
 	public void importCsv() {
 		ose =  new OpenSpecimenException(ErrorType.USER_ERROR);
 		dataSource = new CsvFileDataSource(INPUT_FILE_NAME);
@@ -114,11 +113,7 @@ public class CsvImporter {
 		}
 	}
 	
-//	private String getFile() {
-//		File file = new File(ConfigUtil.getInstance().getDataDir() + File.separatorChar, FILE_NAME); 
-//		return file.getAbsolutePath();
-//	}
-	
+	@PlusTransactional
 	private void importParticipant(Record record) throws ParseException {
 		CollectionProtocolRegistrationDetail cprDetail = new CollectionProtocolRegistrationDetail();
 		VisitDetail visitDetail = new VisitDetail();
@@ -148,21 +143,16 @@ public class CsvImporter {
 		visitDetail.setVisitDate(new SimpleDateFormat(DATE_FORMAT).parse(record.getValue(VISIT_DATE)));
 		
 		ResponseEvent<CollectionProtocolRegistrationDetail> participantResponse = cprSvc.createRegistration(getRequest(cprDetail));
-		ResponseEvent<VisitDetail> visitResponse = visitService.addVisit(getRequest(visitDetail));
 		
 		if (participantResponse.getError() != null) {
 			participantResponse.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
 			addRowToReport(record, participantResponse.getError());
-		}
-		
-		if (visitResponse.getError() != null) {
-			visitResponse.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
-			addRowToReport(record, visitResponse.getError());
-		}
-			
-		if (participantResponse.getError() != null) {
-			participantResponse.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
-			addRowToReport(record, participantResponse.getError());
+		} else {
+			ResponseEvent<VisitDetail> visitResponse = visitService.addVisit(getRequest(visitDetail));
+			if (visitResponse.getError() != null) {
+				visitResponse.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
+				addRowToReport(record, visitResponse.getError());
+			}
 		}
 	}
 	
