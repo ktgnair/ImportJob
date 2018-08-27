@@ -9,7 +9,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -110,7 +110,7 @@ public class CsvImporter {
 		    if (dataSource != null) {
 		    	dataSource.close();
 		    }
-		    FileUtils.deleteQuietly(getReportFile());
+		    IOUtils.closeQuietly(reportFile);
 		}
 	}
 	
