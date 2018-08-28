@@ -9,7 +9,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -21,6 +21,7 @@ import com.krishagni.catissueplus.core.biospecimen.events.CollectionProtocolRegi
 import com.krishagni.catissueplus.core.biospecimen.events.ParticipantDetail;
 import com.krishagni.catissueplus.core.biospecimen.events.PmiDetail;
 import com.krishagni.catissueplus.core.biospecimen.events.VisitDetail;
+import com.krishagni.catissueplus.core.biospecimen.repository.DaoFactory;
 import com.krishagni.catissueplus.core.biospecimen.services.CollectionProtocolRegistrationService;
 import com.krishagni.catissueplus.core.biospecimen.services.VisitService;
 import com.krishagni.catissueplus.core.common.PlusTransactional;
@@ -78,6 +79,9 @@ public class CsvImporter {
 	private int recordsFailed;
 	
 	@Autowired
+	private DaoFactory daoFactory;
+	
+	@Autowired
 	private CollectionProtocolRegistrationService cprSvc;
 	
 	@Autowired
@@ -109,8 +113,8 @@ public class CsvImporter {
 		} finally {
 		    if (dataSource != null) {
 		    	dataSource.close();
-		    }
-		    FileUtils.deleteQuietly(getReportFile());
+		    }		    
+		    IOUtils.closeQuietly(reportFile);
 		}
 	}
 	
@@ -150,24 +154,47 @@ public class CsvImporter {
 		visitDetail.setEventLabel(record.getValue(VISIT) + record.getValue(DAY));
 		visitDetail.setComments(record.getValue(VISIT_COMMENTS));
 		visitDetail.setVisitDate(new SimpleDateFormat(DATE_FORMAT).parse(record.getValue(VISIT_DATE)));
-
-		ResponseEvent<CollectionProtocolRegistrationDetail> participantResponse = cprSvc.createRegistration(getRequest(cprDetail));
 		
-		if (participantResponse.getError() != null) {
-			participantResponse.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
-			addRowToReport(record, participantResponse.getError());
-			return participantResponse.serverError(participantResponse.getError());
+		if (checkParticipantExists(record)) {
+			ResponseEvent<CollectionProtocolRegistrationDetail> updateParticipantResponse = cprSvc.updateRegistration(getRequest(cprDetail));
+			
+			if (updateParticipantResponse.getError() != null) {
+				updateParticipantResponse.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
+				addRowToReport(record, updateParticipantResponse.getError());
+				return ResponseEvent.serverError(updateParticipantResponse.getError());
+			} else {
+				ResponseEvent<VisitDetail> visitResponse = visitService.addVisit(getRequest(visitDetail));
+				if (visitResponse.getError() != null) {
+					visitResponse.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
+					addRowToReport(record, visitResponse.getError());
+					return ResponseEvent.serverError(visitResponse.getError());
+				}
+			}
 		} else {
-			ResponseEvent<VisitDetail> visitResponse = visitService.addVisit(getRequest(visitDetail));
-			if (visitResponse.getError() != null) {
-				visitResponse.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
-				addRowToReport(record, visitResponse.getError());
-				return visitResponse.serverError(visitResponse.getError());
+			ResponseEvent<CollectionProtocolRegistrationDetail> participantResponse = cprSvc.createRegistration(getRequest(cprDetail));
+			
+			if (participantResponse.getError() != null) {
+				participantResponse.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
+				addRowToReport(record, participantResponse.getError());
+				return ResponseEvent.serverError(participantResponse.getError());
+			} else {
+				ResponseEvent<VisitDetail> visitResponse = visitService.addVisit(getRequest(visitDetail));
+				if (visitResponse.getError() != null) {
+					visitResponse.getError().getErrors().forEach(error -> ose.addError(error.error(), error.params()));
+					addRowToReport(record, visitResponse.getError());
+					return ResponseEvent.serverError(visitResponse.getError());
+				}
 			}
 		}
-
 		return null;
-	} 
+	}
+	
+	private boolean checkParticipantExists(Record record) {
+		if (daoFactory.getCprDao().getCprByCpShortTitleAndPpid(record.getValue(CP_SHORT_TITLE), record.getValue(PPID))!= null) {
+			return true;
+		}
+		return false;
+	}
 	
 	private void addRowToReport(Record record, OpenSpecimenException error) {
 		List<String> data = getRow(record);
@@ -179,8 +206,7 @@ public class CsvImporter {
 	private List<String> getRow(Record record) {
 		List<String> headers = getCsvHeaders();
 		List<String> values = new ArrayList<>();
-		headers.forEach(header -> values.add(record.getValue(header)));
-		
+		headers.forEach(header -> values.add(record.getValue(header)));		
 		return values;
 	}
 
